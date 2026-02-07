@@ -11,7 +11,7 @@ function Invoke-RoboCopy {
   $argsList = @($Source, $Destination, '/E', '/XD', '.git') + $ExtraArgs
   & robocopy @argsList | Out-Null
 
-  # Robocopy uses bitflag exit codes; <= 7 means success (incl. "files copied").
+  # Robocopy uses bitflag exit codes; <= 7 means success.
   if ($LASTEXITCODE -gt 7) {
     throw "robocopy failed (exit=$LASTEXITCODE): $Source -> $Destination"
   }
@@ -32,30 +32,36 @@ Write-Host "Site root:   $siteRoot"
 Write-Host "Twitter src: $twitterSrc"
 Write-Host "2ch src:     $chSrc"
 
-# Rebuild publish outputs (keep: hub/, sw.js customizations).
-Remove-IfExists (Join-Path $siteRoot 'assets')
-Remove-IfExists (Join-Path $siteRoot 'css')
-Remove-IfExists (Join-Path $siteRoot 'js')
+# Rebuild publish outputs for apps only.
+Remove-IfExists (Join-Path $siteRoot 'twi')
 Remove-IfExists (Join-Path $siteRoot '2ch')
-Remove-IfExists (Join-Path $siteRoot 'community-submissions')
 
-foreach ($file in @('index.html', 'manifest.webmanifest', 'CNAME', '.gitignore')) {
-  $srcPath = Join-Path $twitterSrc $file
-  $dstPath = Join-Path $siteRoot $file
-  if (Test-Path -LiteralPath $srcPath) {
-    Copy-Item -LiteralPath $srcPath -Destination $dstPath -Force
-  }
-}
-
-Invoke-RoboCopy -Source (Join-Path $twitterSrc 'assets') -Destination (Join-Path $siteRoot 'assets')
-Invoke-RoboCopy -Source (Join-Path $twitterSrc 'css') -Destination (Join-Path $siteRoot 'css')
-Invoke-RoboCopy -Source (Join-Path $twitterSrc 'js') -Destination (Join-Path $siteRoot 'js')
-
-if (Test-Path -LiteralPath (Join-Path $twitterSrc 'community-submissions')) {
-  Invoke-RoboCopy -Source (Join-Path $twitterSrc 'community-submissions') -Destination (Join-Path $siteRoot 'community-submissions')
-}
+New-Item -ItemType Directory -Path (Join-Path $siteRoot 'twi') | Out-Null
+Invoke-RoboCopy -Source $twitterSrc -Destination (Join-Path $siteRoot 'twi')
 
 New-Item -ItemType Directory -Path (Join-Path $siteRoot '2ch') | Out-Null
 Invoke-RoboCopy -Source $chSrc -Destination (Join-Path $siteRoot '2ch')
 
-Write-Host "Done."
+# Remove nested domain binding file from app subfolder.
+$nestedCname = Join-Path $siteRoot 'twi\\CNAME'
+if (Test-Path -LiteralPath $nestedCname) {
+  Remove-Item -LiteralPath $nestedCname -Force
+}
+
+# Fix cross-app links for aggregated deployment.
+$twiIndexPath = Join-Path $siteRoot 'twi\\index.html'
+if (Test-Path -LiteralPath $twiIndexPath) {
+  $twiIndex = Get-Content -LiteralPath $twiIndexPath -Raw
+  $twiIndex = $twiIndex.Replace('href="hub/"', 'href="../"')
+  $twiIndex = $twiIndex.Replace('href="2ch/"', 'href="../2ch/"')
+  Set-Content -LiteralPath $twiIndexPath -Value $twiIndex -Encoding UTF8
+}
+
+$chAppPath = Join-Path $siteRoot '2ch\\js\\app.js'
+if (Test-Path -LiteralPath $chAppPath) {
+  $chApp = Get-Content -LiteralPath $chAppPath -Raw
+  $chApp = $chApp.Replace('<a href="../hub/">Hub</a><span class="sep">|</span><a href="../">Twitter</a>', '<a href="../">入口</a><span class="sep">|</span><a href="../twi/">Twitter</a>')
+  Set-Content -LiteralPath $chAppPath -Value $chApp -Encoding UTF8
+}
+
+Write-Host 'Done.'

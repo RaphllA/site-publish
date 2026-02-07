@@ -650,7 +650,7 @@ class App {
       <header class="site-header">
         <h1 class="site-title">所长的谣言板</h1>
         <div class="site-nav">
-          <a href="../hub/">Hub</a><span class="sep">|</span><a href="../">Twitter</a>
+          <a href="../">入口</a><span class="sep">|</span><a href="../twi/">Twitter</a>
           <span class="sep">|</span>
           <a href="#" data-action="toggle-mode">${isEdit ? '查看模式' : '编辑模式'}</a>
         </div>
@@ -681,7 +681,7 @@ class App {
           <div class="site-nav">
             <a href="index.html" style="text-decoration:none; color: #CC0000;">&lt; 返回</a>
             <span class="sep">|</span>
-            <a href="../hub/">Hub</a><span class="sep">|</span><a href="../">Twitter</a>
+            <a href="../">入口</a><span class="sep">|</span><a href="../twi/">Twitter</a>
           </div>
         </div>
         <p style="padding: 10px; color:#666;">Thread not found: ${escapeHtml(threadId)}</p>
@@ -737,7 +737,7 @@ class App {
         <div class="site-nav">
           <a href="index.html" style="text-decoration:none; color: #CC0000;">&lt; 返回</a>
           <span class="sep">|</span>
-          <a href="../hub/">Hub</a><span class="sep">|</span><a href="../">Twitter</a>
+          <a href="../">入口</a><span class="sep">|</span><a href="../twi/">Twitter</a>
           <span class="sep">|</span>
           <a href="#" data-action="toggle-mode">${isEdit ? '查看模式' : '编辑模式'}</a>
         </div>
