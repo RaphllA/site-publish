@@ -65,6 +65,11 @@ function safeThreadId(input) {
   return id;
 }
 
+function normalizeThreadIdentifier(input) {
+  if (input === null || input === undefined) return '';
+  return String(input).trim();
+}
+
 
 
 function cloneDeep(obj) {
@@ -102,10 +107,19 @@ class App {
 
   normalizeStateShape(raw) {
     if (!raw || !Array.isArray(raw.threads)) return null;
+    const normalizedThreads = raw.threads
+      .map((thread) => {
+        if (!thread || typeof thread !== 'object') return null;
+        const normalized = cloneDeep(thread);
+        normalized.id = normalizeThreadIdentifier(normalized.id);
+        if (!normalized.id) return null;
+        return normalized;
+      })
+      .filter(Boolean);
     return {
       schemaVersion: STATE_SCHEMA_VERSION,
       dataVersion: Number.isFinite(raw.dataVersion) ? raw.dataVersion : 0,
-      threads: cloneDeep(raw.threads)
+      threads: normalizedThreads
     };
   }
 
@@ -312,7 +326,7 @@ class App {
 
   async init() {
     const urlParams = new URLSearchParams(window.location.search);
-    const threadId = urlParams.get('id');
+    const threadId = normalizeThreadIdentifier(urlParams.get('id'));
 
     if (threadId) {
       this.mode = 'thread';
@@ -503,7 +517,12 @@ class App {
         return;
       }
       if (action === 'submit-thread') {
-        alert('投稿功能暂未开放，当前版本仅支持本地编辑与保存。');
+        const form = this.container.querySelector('#thread-form');
+        if (form instanceof HTMLFormElement) {
+          this.submitThreadForm(form);
+        } else {
+          alert('未找到发帖表单。');
+        }
         return;
       }
       if (action === 'cancel-thread-form') {
@@ -586,15 +605,17 @@ class App {
   getSortedThreads() {
     const threads = [...(this.state.threads || [])];
     threads.sort((a, b) => {
-      if (a.id === 'intro') return -1;
-      if (b.id === 'intro') return 1;
+      if (normalizeThreadIdentifier(a?.id) === INTRO_THREAD_ID) return -1;
+      if (normalizeThreadIdentifier(b?.id) === INTRO_THREAD_ID) return 1;
       return parseDateToMillis(b.listDate) - parseDateToMillis(a.listDate);
     });
     return threads;
   }
 
   getThread(threadId) {
-    return (this.state.threads || []).find((t) => t.id === threadId) || null;
+    const targetId = normalizeThreadIdentifier(threadId);
+    if (!targetId) return null;
+    return (this.state.threads || []).find((t) => normalizeThreadIdentifier(t?.id) === targetId) || null;
   }
 
   render() {
@@ -1081,10 +1102,11 @@ class App {
   }
 
   deleteThread(threadId) {
-    const thread = this.getThread(threadId);
+    const targetId = normalizeThreadIdentifier(threadId);
+    const thread = this.getThread(targetId);
     if (!thread) return;
-    if (!confirm(`确定删除 thread: ${threadId} ?`)) return;
-    this.state.threads = (this.state.threads || []).filter((t) => t.id !== threadId);
+    if (!confirm(`确定删除 thread: ${targetId} ?`)) return;
+    this.state.threads = (this.state.threads || []).filter((t) => normalizeThreadIdentifier(t?.id) !== targetId);
     this.saveState();
     this.renderIndex();
   }
@@ -1220,7 +1242,12 @@ class App {
   }
 
   async submitThread() {
-    alert('投稿功能暂未开放，当前版本仅支持本地编辑与保存。');
+    const form = this.container.querySelector('#thread-form');
+    if (form instanceof HTMLFormElement) {
+      this.submitThreadForm(form);
+      return;
+    }
+    alert('未找到发帖表单。');
   }
 
   getAuthorUid(thread, authorKey) {
