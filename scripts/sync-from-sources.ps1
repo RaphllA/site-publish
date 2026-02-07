@@ -37,6 +37,7 @@ Remove-IfExists (Join-Path $siteRoot 'assets')
 Remove-IfExists (Join-Path $siteRoot 'css')
 Remove-IfExists (Join-Path $siteRoot 'js')
 Remove-IfExists (Join-Path $siteRoot '2ch')
+Remove-IfExists (Join-Path $siteRoot 'community-submissions')
 
 foreach ($file in @('index.html', 'manifest.webmanifest', 'CNAME', '.gitignore')) {
   $srcPath = Join-Path $twitterSrc $file
@@ -50,8 +51,11 @@ Invoke-RoboCopy -Source (Join-Path $twitterSrc 'assets') -Destination (Join-Path
 Invoke-RoboCopy -Source (Join-Path $twitterSrc 'css') -Destination (Join-Path $siteRoot 'css')
 Invoke-RoboCopy -Source (Join-Path $twitterSrc 'js') -Destination (Join-Path $siteRoot 'js')
 
+if (Test-Path -LiteralPath (Join-Path $twitterSrc 'community-submissions')) {
+  Invoke-RoboCopy -Source (Join-Path $twitterSrc 'community-submissions') -Destination (Join-Path $siteRoot 'community-submissions')
+}
+
 New-Item -ItemType Directory -Path (Join-Path $siteRoot '2ch') | Out-Null
 Invoke-RoboCopy -Source $chSrc -Destination (Join-Path $siteRoot '2ch')
 
 Write-Host "Done."
-

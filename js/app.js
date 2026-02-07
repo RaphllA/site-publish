@@ -2067,7 +2067,18 @@ const I18N = {
         fieldViews: '查看数',
         translationPlaceholder: '翻译文本',
         syncAccountAvatar: '同时同步为该账号头像',
-        cropHelp: '拖动边中点可改长宽比，右下角可自由缩放'
+        cropHelp: '拖动边中点可改长宽比，右下角可自由缩放',
+        communityGallery: '社区',
+        communityGalleryTitle: '社区项目',
+        communityGalleryHint: '合并到仓库后的投稿会出现在这里，可一键导入。',
+        communityGallerySearch: '搜索',
+        communityGalleryRefresh: '刷新',
+        communityGalleryLoad: '导入',
+        communityGalleryEmpty: '(空)',
+        communityGalleryLoading: '加载中...',
+        communityGalleryLoadConfirm: '导入会替换当前项目，继续？',
+        communityGalleryLoadOk: '已导入。',
+        communityGalleryLoadError: '加载失败：'
     },
     'ja-JP': {
         nav: ['ホーム', 'Hub', '2ch', '話題を検索', '通知', 'メッセージ', 'ヤチヨ', 'ブックマーク', 'クリエイタースタジオ', 'Premium', 'プロフィール', 'もっと見る'],
@@ -2130,7 +2141,18 @@ const I18N = {
         fieldViews: '表示数',
         translationPlaceholder: '翻訳テキスト',
         syncAccountAvatar: 'このポストのアイコンをアカウントにも同期',
-        cropHelp: '辺の中央で比率調整、右下で自由リサイズ'
+        cropHelp: '辺の中央で比率調整、右下で自由リサイズ',
+        communityGallery: 'コミュニティ',
+        communityGalleryTitle: 'コミュニティ',
+        communityGalleryHint: 'マージされた投稿はここに表示され、ワンクリックで読み込めます。',
+        communityGallerySearch: '検索',
+        communityGalleryRefresh: '更新',
+        communityGalleryLoad: '読み込む',
+        communityGalleryEmpty: '(空)',
+        communityGalleryLoading: '読み込み中...',
+        communityGalleryLoadConfirm: '現在のプロジェクトを置き換えます。続行しますか？',
+        communityGalleryLoadOk: '読み込みました。',
+        communityGalleryLoadError: '読み込み失敗：'
     }
 };
 
@@ -2295,6 +2317,7 @@ function applyLocale() {
     setText('#sidebar-import-label', t('importData'));
     setText('#sidebar-export-label', t('exportData'));
     setText('#sidebar-submit-label', t('submitToCommunity'));
+    setText('#sidebar-community-label', t('communityGallery'));
     setText('#sidebar-export-html-label', t('exportHtml'));
     setText('#sidebar-mode-label', appMode === 'view' ? t('modeView') : t('modeEdit'));
     setText('#sidebar-locale-label', t('language'));
@@ -2395,6 +2418,10 @@ function ensureTopTools() {
                 <svg viewBox="0 0 24 24"><path d="M2 21l21-9L2 3v7l15 2-15 2v7z"/></svg>
                 <span id="sidebar-submit-label"></span>
             </button>
+            <button id="sidebar-community-btn" class="sidebar-tool-btn" type="button">
+                <svg viewBox="0 0 24 24"><path d="M16 11c1.66 0 3-1.34 3-3s-1.34-3-3-3-3 1.34-3 3 1.34 3 3 3zm-8 0c1.66 0 3-1.34 3-3S9.66 5 8 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4zm8 0c-.33 0-.7.02-1.09.05 1.84 1.11 3.09 2.67 3.09 3.95v2h6v-2c0-2.66-5.33-4-8-4z"/></svg>
+                <span id="sidebar-community-label"></span>
+            </button>
             <button id="sidebar-export-html-btn" class="sidebar-tool-btn editor-only" type="button">
                 <svg viewBox="0 0 24 24"><path d="M14 2H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V8l-6-6zm4 18H6V4h7v5h5v11z"/></svg>
                 <span id="sidebar-export-html-label"></span>
@@ -2468,6 +2495,12 @@ function ensureTopTools() {
     if (submitBtn && !submitBtn.dataset.bound) {
         submitBtn.dataset.bound = '1';
         submitBtn.onclick = openCommunitySubmissionModal;
+    }
+
+    const communityBtn = document.getElementById('sidebar-community-btn');
+    if (communityBtn && !communityBtn.dataset.bound) {
+        communityBtn.dataset.bound = '1';
+        communityBtn.onclick = openCommunityGalleryModal;
     }
 
     const exportHtmlBtn = document.getElementById('sidebar-export-html-btn');
@@ -3245,6 +3278,192 @@ async function submitCommunitySubmission() {
         if (sendBtn) {
             sendBtn.disabled = false;
         }
+    }
+}
+
+function escapeHtml(s) {
+    return String(s || '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
+
+function getCommunityConfig() {
+    const cfg = (window.APP_COMMUNITY_CONFIG && typeof window.APP_COMMUNITY_CONFIG === 'object')
+        ? window.APP_COMMUNITY_CONFIG
+        : {};
+    const indexUrl = typeof cfg.indexUrl === 'string' && cfg.indexUrl.trim()
+        ? cfg.indexUrl.trim()
+        : 'community-submissions/twitter/index.json';
+    return { indexUrl };
+}
+
+let communityGalleryAllItems = [];
+
+function ensureCommunityGalleryModal() {
+    if (document.getElementById('community-gallery-modal')) return;
+
+    const modal = document.createElement('div');
+    modal.id = 'community-gallery-modal';
+    modal.className = 'modal';
+    modal.innerHTML = `
+        <div class="modal-content modal-wide">
+            <h3>${escapeHtml(t('communityGalleryTitle'))}</h3>
+            <div class="modal-hint">${escapeHtml(t('communityGalleryHint'))}</div>
+            <div class="modal-field">
+                <label class="modal-label" for="community-gallery-q">${escapeHtml(t('communityGallerySearch'))}</label>
+                <input id="community-gallery-q" type="text" placeholder="${escapeHtml(t('communityGallerySearch'))}" />
+            </div>
+            <div id="community-gallery-status" class="modal-hint" aria-live="polite"></div>
+            <div id="community-gallery-list" class="community-gallery-list"></div>
+            <div class="modal-actions">
+                <button id="community-gallery-close" type="button">${escapeHtml(t('close'))}</button>
+                <button id="community-gallery-refresh" type="button">${escapeHtml(t('communityGalleryRefresh'))}</button>
+            </div>
+        </div>
+    `;
+
+    modal.addEventListener('click', (e) => {
+        if (e.target && e.target.id === 'community-gallery-modal') {
+            closeCommunityGalleryModal();
+        }
+    });
+
+    document.body.appendChild(modal);
+
+    document.getElementById('community-gallery-close')?.addEventListener('click', closeCommunityGalleryModal);
+    document.getElementById('community-gallery-refresh')?.addEventListener('click', refreshCommunityGallery);
+    document.getElementById('community-gallery-q')?.addEventListener('input', renderCommunityGalleryList);
+
+    document.getElementById('community-gallery-list')?.addEventListener('click', async (e) => {
+        const btn = e.target.closest('.community-load-btn');
+        if (!btn) return;
+        const path = btn.dataset.path || '';
+        if (!path) return;
+        await loadCommunityProject(path);
+    });
+}
+
+function openCommunityGalleryModal() {
+    ensureCommunityGalleryModal();
+    document.getElementById('community-gallery-status').textContent = '';
+    document.getElementById('community-gallery-q').value = '';
+    document.getElementById('community-gallery-modal').classList.add('active');
+    refreshCommunityGallery();
+}
+
+function closeCommunityGalleryModal() {
+    document.getElementById('community-gallery-modal')?.classList.remove('active');
+}
+
+function setCommunityGalleryStatus(text) {
+    const el = document.getElementById('community-gallery-status');
+    if (!el) return;
+    el.textContent = text || '';
+}
+
+async function refreshCommunityGallery() {
+    const { indexUrl } = getCommunityConfig();
+    setCommunityGalleryStatus(t('communityGalleryLoading'));
+
+    try {
+        const res = await fetch(indexUrl, { cache: 'no-store' });
+        if (res.status === 404) {
+            communityGalleryAllItems = [];
+            setCommunityGalleryStatus('');
+            renderCommunityGalleryList();
+            return;
+        }
+        if (!res.ok) {
+            setCommunityGalleryStatus(`${t('communityGalleryLoadError')}${res.status}`);
+            return;
+        }
+        const data = await res.json().catch(() => ({}));
+        const items = Array.isArray(data?.items) ? data.items : [];
+        communityGalleryAllItems = items
+            .filter((it) => it && typeof it === 'object' && it.id && it.path)
+            .map((it) => ({
+                id: String(it.id),
+                createdAt: it.createdAt ? String(it.createdAt) : '',
+                authorDisplayName: it.authorDisplayName ? String(it.authorDisplayName) : '',
+                note: it.note ? String(it.note) : '',
+                path: String(it.path)
+            }));
+        setCommunityGalleryStatus('');
+        renderCommunityGalleryList();
+    } catch (err) {
+        console.warn('Failed to load community index:', err);
+        setCommunityGalleryStatus(`${t('communityGalleryLoadError')}${err.message || String(err)}`);
+    }
+}
+
+function renderCommunityGalleryList() {
+    const list = document.getElementById('community-gallery-list');
+    if (!list) return;
+
+    const q = (document.getElementById('community-gallery-q')?.value || '').trim().toLowerCase();
+    const items = q
+        ? communityGalleryAllItems.filter((it) => {
+            return (
+                it.id.toLowerCase().includes(q) ||
+                it.authorDisplayName.toLowerCase().includes(q) ||
+                it.note.toLowerCase().includes(q)
+            );
+        })
+        : communityGalleryAllItems.slice();
+
+    if (!items.length) {
+        list.innerHTML = `<div class="community-empty">${escapeHtml(t('communityGalleryEmpty'))}</div>`;
+        return;
+    }
+
+    list.innerHTML = items.map((it) => {
+        const who = it.authorDisplayName ? escapeHtml(it.authorDisplayName) : 'Anonymous';
+        const note = it.note ? `<div class="community-item-note">${escapeHtml(it.note)}</div>` : '';
+        const created = it.createdAt ? `<div class="community-item-meta">${escapeHtml(it.createdAt)}</div>` : '';
+        return `
+            <div class="community-item">
+                <div class="community-item-main">
+                    <div class="community-item-title">${who} <span class="community-item-id">${escapeHtml(it.id)}</span></div>
+                    ${created}
+                    ${note}
+                </div>
+                <div class="community-item-actions">
+                    <button class="community-load-btn" type="button" data-path="${escapeHtml(it.path)}">${escapeHtml(t('communityGalleryLoad'))}</button>
+                </div>
+            </div>
+        `;
+    }).join('');
+}
+
+async function loadCommunityProject(path) {
+    if (!confirm(t('communityGalleryLoadConfirm'))) return;
+
+    setCommunityGalleryStatus(t('communityGalleryLoading'));
+    try {
+        const res = await fetch(path, { cache: 'no-store' });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+            setCommunityGalleryStatus(`${t('communityGalleryLoadError')}${data.error || res.status}`);
+            return;
+        }
+
+        const payload = data && data.payload;
+        if (!payload || !Array.isArray(payload.tweets)) {
+            setCommunityGalleryStatus(`${t('communityGalleryLoadError')}invalid payload`);
+            return;
+        }
+
+        replaceProjectState({ tweets: payload.tweets, accounts: payload.accounts || [], ui: payload.ui || {} });
+        if (payload.locale) setLocale(payload.locale);
+        currentData = loadData();
+        closeCommunityGalleryModal();
+        showTimeline();
+    } catch (err) {
+        console.warn('Failed to load community project:', err);
+        setCommunityGalleryStatus(`${t('communityGalleryLoadError')}${err.message || String(err)}`);
     }
 }
 

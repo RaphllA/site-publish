@@ -53,6 +53,7 @@ function shouldUseNetworkFirst(request, url) {
   return (
     url.pathname.endsWith('.js') ||
     url.pathname.endsWith('.css') ||
+    url.pathname.endsWith('.json') ||
     url.pathname.endsWith('.html') ||
     url.pathname.endsWith('.webmanifest') ||
     url.pathname.endsWith('.md')
