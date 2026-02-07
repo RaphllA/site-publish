@@ -37,6 +37,17 @@ a {
     margin: 0;
 }
 
+.site-nav {
+    margin-top: 6px;
+    font-size: 13px;
+    color: #666;
+}
+
+.site-nav .sep {
+    margin: 0 6px;
+    color: #999;
+}
+
 /* Thread List Table (Index) */
 .thread-table {
     width: 100%;

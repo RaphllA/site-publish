@@ -55,6 +55,9 @@ class App {
         let html = `
             <header class="site-header">
                 <h1 class="site-title">所长的谣言板</h1>
+                <div class="site-nav">
+                    <a href="../hub/">Hub</a><span class="sep">|</span><a href="../">Twitter</a>
+                </div>
             </header>
             <div style="padding: 10px;">
                 <table class="thread-table">
@@ -90,7 +93,13 @@ class App {
         // Header
         let html = `
             <div class="site-header">
-                <a href="index.html" style="text-decoration:none; color: #CC0000;">&lt; 戻る</a>
+                <div class="site-nav">
+                    <a href="index.html" style="text-decoration:none; color: #CC0000;">&lt; 戻る</a>
+                    <span class="sep">|</span>
+                    <a href="../hub/">Hub</a>
+                    <span class="sep">|</span>
+                    <a href="../">Twitter</a>
+                </div>
             </div>
             <h1 class="thread-title">${data.title}</h1>
             <hr class="title-divider">
