@@ -1,5 +1,11 @@
-const STATE_KEY = 'tukuyomi-2ch-state-v1';
+﻿const STATE_KEY = 'tukuyomi-2ch-state-v1';
 const UI_MODE_KEY = 'tukuyomi-2ch-ui-mode';
+const STATE_SCHEMA_VERSION = 2;
+const DATA_VERSION = 1;
+const APP_STATE_DB_NAME = 'Tukuyomi2chDB';
+const APP_STATE_DB_VERSION = 1;
+const APP_STATE_STORE = 'appState';
+const APP_STATE_RECORD_KEY = 'current';
 
 function escapeHtml(text) {
   return String(text || '')
@@ -58,13 +64,22 @@ function safeThreadId(input) {
   return id;
 }
 
+
+
+function cloneDeep(obj) {
+  return JSON.parse(JSON.stringify(obj));
+}
+
 class App {
   constructor() {
     this.container = document.querySelector('.container');
     this.mode = 'index';
     this.currentThreadId = null;
+    this.editingPostNumber = null;
     this.uiMode = this.loadUiMode();
     this.state = null;
+    this._dbPromise = null;
+    this._persistQueue = Promise.resolve();
     this._seedWaiter = null;
   }
 
@@ -84,25 +99,195 @@ class App {
     } catch { }
   }
 
-  loadState() {
+  normalizeStateShape(raw) {
+    if (!raw || !Array.isArray(raw.threads)) return null;
+    return {
+      schemaVersion: STATE_SCHEMA_VERSION,
+      dataVersion: Number.isFinite(raw.dataVersion) ? raw.dataVersion : 0,
+      threads: cloneDeep(raw.threads)
+    };
+  }
+
+  mergePosts(defaultPosts, savedPosts) {
+    const base = Array.isArray(defaultPosts) ? defaultPosts : [];
+    const saved = Array.isArray(savedPosts) ? savedPosts : [];
+    const savedMap = new Map(saved.map((post) => [Number(post?.number || 0), post]));
+    const merged = [];
+
+    for (const post of base) {
+      const number = Number(post?.number || 0);
+      const savedPost = savedMap.get(number);
+      merged.push(savedPost ? { ...cloneDeep(post), ...cloneDeep(savedPost) } : cloneDeep(post));
+    }
+
+    const baseNumbers = new Set(base.map((post) => Number(post?.number || 0)));
+    for (const post of saved) {
+      const number = Number(post?.number || 0);
+      if (!baseNumbers.has(number)) {
+        merged.push(cloneDeep(post));
+      }
+    }
+
+    merged.sort((a, b) => Number(a?.number || 0) - Number(b?.number || 0));
+    return merged;
+  }
+
+  mergeThreads(defaultThreads, savedThreads) {
+    const base = Array.isArray(defaultThreads) ? defaultThreads : [];
+    const saved = Array.isArray(savedThreads) ? savedThreads : [];
+    const savedMap = new Map(saved.map((thread) => [String(thread?.id || ''), thread]));
+    const merged = [];
+
+    for (const thread of base) {
+      const id = String(thread?.id || '');
+      const savedThread = savedMap.get(id);
+      if (!savedThread) {
+        merged.push(cloneDeep(thread));
+        continue;
+      }
+
+      const next = { ...cloneDeep(thread), ...cloneDeep(savedThread) };
+      next.posts = this.mergePosts(thread.posts, savedThread.posts);
+      next.authors = { ...(thread.authors || {}), ...(savedThread.authors || {}) };
+      merged.push(next);
+    }
+
+    const baseIds = new Set(base.map((thread) => String(thread?.id || '')));
+    for (const thread of saved) {
+      const id = String(thread?.id || '');
+      if (!baseIds.has(id)) {
+        merged.push(cloneDeep(thread));
+      }
+    }
+    return merged;
+  }
+
+  mergeState(defaultState, savedState) {
+    const base = this.normalizeStateShape(defaultState) || { schemaVersion: STATE_SCHEMA_VERSION, dataVersion: DATA_VERSION, threads: [] };
+    const saved = this.normalizeStateShape(savedState);
+    if (!saved) return base;
+    return {
+      schemaVersion: STATE_SCHEMA_VERSION,
+      dataVersion: DATA_VERSION,
+      threads: this.mergeThreads(base.threads, saved.threads)
+    };
+  }
+
+  readLegacyStateFromLocalStorage() {
     try {
       const raw = localStorage.getItem(STATE_KEY);
       if (!raw) return null;
-      const parsed = JSON.parse(raw);
-      if (!parsed || parsed.schemaVersion !== 1 || !Array.isArray(parsed.threads)) return null;
-      return parsed;
+      return JSON.parse(raw);
     } catch {
       return null;
     }
   }
 
-  saveState() {
+  clearLegacyStateFromLocalStorage() {
     try {
-      localStorage.setItem(STATE_KEY, JSON.stringify(this.state));
-    } catch (e) {
-      alert('保存失败：localStorage 可能已满或被禁用。');
-      console.warn('Save failed:', e);
+      localStorage.removeItem(STATE_KEY);
+    } catch { }
+  }
+
+  async openStateDb() {
+    if (this._dbPromise) return this._dbPromise;
+    if (!window.indexedDB) return null;
+
+    this._dbPromise = new Promise((resolve, reject) => {
+      const req = indexedDB.open(APP_STATE_DB_NAME, APP_STATE_DB_VERSION);
+      req.onerror = () => reject(req.error || new Error('Failed to open IndexedDB'));
+      req.onupgradeneeded = () => {
+        const db = req.result;
+        if (!db.objectStoreNames.contains(APP_STATE_STORE)) {
+          db.createObjectStore(APP_STATE_STORE);
+        }
+      };
+      req.onsuccess = () => resolve(req.result);
+    }).catch((err) => {
+      console.warn('IndexedDB unavailable, fallback to localStorage:', err);
+      return null;
+    });
+
+    return this._dbPromise;
+  }
+
+  async readStateFromIndexedDb() {
+    const db = await this.openStateDb();
+    if (!db) return null;
+    return await new Promise((resolve) => {
+      const tx = db.transaction([APP_STATE_STORE], 'readonly');
+      const store = tx.objectStore(APP_STATE_STORE);
+      const req = store.get(APP_STATE_RECORD_KEY);
+      req.onsuccess = () => resolve(req.result || null);
+      req.onerror = () => resolve(null);
+    });
+  }
+
+  async writeStateToIndexedDb(state) {
+    const db = await this.openStateDb();
+    if (!db) return false;
+    return await new Promise((resolve) => {
+      const tx = db.transaction([APP_STATE_STORE], 'readwrite');
+      const store = tx.objectStore(APP_STATE_STORE);
+      const req = store.put(cloneDeep(state), APP_STATE_RECORD_KEY);
+      req.onsuccess = () => resolve(true);
+      req.onerror = () => resolve(false);
+    });
+  }
+
+  async loadState(defaultState) {
+    const baseState = this.normalizeStateShape(defaultState) || { schemaVersion: STATE_SCHEMA_VERSION, dataVersion: DATA_VERSION, threads: [] };
+    let fromLegacy = false;
+
+    let persisted = await this.readStateFromIndexedDb();
+    if (!persisted) {
+      persisted = this.readLegacyStateFromLocalStorage();
+      fromLegacy = Boolean(persisted);
     }
+
+    const savedState = this.normalizeStateShape(persisted);
+    let nextState = baseState;
+    if (savedState) {
+      nextState = savedState.dataVersion >= DATA_VERSION
+        ? {
+          schemaVersion: STATE_SCHEMA_VERSION,
+          dataVersion: savedState.dataVersion,
+          threads: cloneDeep(savedState.threads)
+        }
+        : this.mergeState(baseState, savedState);
+    }
+
+    nextState.schemaVersion = STATE_SCHEMA_VERSION;
+    nextState.dataVersion = DATA_VERSION;
+    this.state = nextState;
+    this.saveState();
+
+    if (fromLegacy) {
+      this.clearLegacyStateFromLocalStorage();
+    }
+
+    return nextState;
+  }
+
+  saveState() {
+    const snapshot = cloneDeep(this.state || { schemaVersion: STATE_SCHEMA_VERSION, dataVersion: DATA_VERSION, threads: [] });
+    this._persistQueue = this._persistQueue
+      .then(async () => {
+        const ok = await this.writeStateToIndexedDb(snapshot);
+        if (!ok) {
+          localStorage.setItem(STATE_KEY, JSON.stringify(snapshot));
+          return;
+        }
+        this.clearLegacyStateFromLocalStorage();
+      })
+      .catch((e) => {
+        console.warn('Save failed:', e);
+        try {
+          localStorage.setItem(STATE_KEY, JSON.stringify(snapshot));
+        } catch (fallbackErr) {
+          console.warn('Fallback localStorage save failed:', fallbackErr);
+        }
+      });
   }
 
   async init() {
@@ -120,12 +305,9 @@ class App {
       }
     }
 
-    this.state = this.loadState();
-    if (!this.state) {
-      this.container.innerHTML = `<p>Loading data...</p>`;
-      this.state = await this.seedFromFiles();
-      this.saveState();
-    }
+    this.container.innerHTML = `<p>Loading data...</p>`;
+    const defaultState = await this.seedFromFiles();
+    this.state = await this.loadState(defaultState);
 
     this.bindEvents();
     this.render();
@@ -252,7 +434,8 @@ class App {
     }
 
     return {
-      schemaVersion: 1,
+      schemaVersion: STATE_SCHEMA_VERSION,
+      dataVersion: DATA_VERSION,
       threads
     };
   }
@@ -269,7 +452,11 @@ class App {
 
       const action = actionEl.dataset.action;
       if (action === 'toggle-mode') {
-        this.saveUiMode(this.uiMode === 'edit' ? 'view' : 'edit');
+        const nextMode = this.uiMode === 'edit' ? 'view' : 'edit';
+        this.saveUiMode(nextMode);
+        if (nextMode !== 'edit') {
+          this.editingPostNumber = null;
+        }
         this.render();
         return;
       }
@@ -286,12 +473,17 @@ class App {
         this.fillPostForm(Number(actionEl.dataset.postNumber || '0'));
         return;
       }
+      if (action === 'cancel-edit-post') {
+        this.editingPostNumber = null;
+        this.renderThread(this.currentThreadId);
+        return;
+      }
       if (action === 'delete-post') {
         this.deletePost(Number(actionEl.dataset.postNumber || '0'));
         return;
       }
       if (action === 'submit-thread') {
-        this.submitThread();
+        alert('投稿功能暂未开放，当前版本仅支持本地编辑与保存。');
         return;
       }
       if (action === 'cancel-thread-form') {
@@ -300,6 +492,21 @@ class App {
       }
       if (action === 'cancel-post-form') {
         this.resetPostForm();
+        return;
+      }
+      if (action === 'add-quote-item') {
+        const form = actionEl.closest('form');
+        if (form instanceof HTMLFormElement) {
+          this.addQuoteItem(form);
+        }
+        return;
+      }
+      if (action === 'remove-quote-item') {
+        const form = actionEl.closest('form');
+        const quoteNumber = Number(actionEl.dataset.quoteNumber || '0');
+        if (form instanceof HTMLFormElement && quoteNumber > 0) {
+          this.removeQuoteItem(form, quoteNumber);
+        }
         return;
       }
     });
@@ -312,7 +519,7 @@ class App {
         this.submitThreadForm(form);
         return;
       }
-      if (form.id === 'post-form') {
+      if (form.classList.contains('post-form')) {
         e.preventDefault();
         this.submitPostForm(form);
         return;
@@ -322,11 +529,36 @@ class App {
     this.container.addEventListener('change', (e) => {
       const el = e.target;
       if (!(el instanceof HTMLSelectElement)) return;
-      if (el.id === 'post-uid-mode') {
-        const wrap = this.container.querySelector('#post-uid-value-wrap');
+      if (el.classList.contains('post-uid-mode')) {
+        const form = el.closest('form');
+        const wrap = form ? form.querySelector('.uid-custom-wrap') : null;
         if (wrap) {
-          wrap.style.display = el.value === 'custom' ? 'block' : 'none';
+          wrap.style.display = el.value === 'custom' ? 'flex' : 'none';
         }
+      }
+    });
+
+    this.container.addEventListener('keydown', (e) => {
+      const el = e.target;
+      if (!(el instanceof HTMLInputElement)) return;
+      if (!el.classList.contains('quote-number-input')) return;
+
+      const form = el.closest('form');
+      if (!(form instanceof HTMLFormElement)) return;
+
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        this.addQuoteItem(form);
+        return;
+      }
+
+      if (e.key === 'Backspace' && !el.value.trim()) {
+        const hidden = form.querySelector('input[name="quote"]');
+        if (!(hidden instanceof HTMLInputElement)) return;
+        const numbers = this.parseQuoteNumbers(hidden.value);
+        if (!numbers.length) return;
+        e.preventDefault();
+        this.removeQuoteItem(form, numbers[numbers.length - 1]);
       }
     });
   }
@@ -381,31 +613,35 @@ class App {
 
     const threadEditor = isEdit
       ? `
-        <form id="thread-form" class="editor-box" autocomplete="off">
+        <form id="thread-form" class="editor-box thread-editor-shell" autocomplete="off">
           <input type="hidden" id="thread-form-mode" value="create" />
-          <div class="editor-grid">
-            <label>
-              <span class="label">Thread ID</span>
-              <input id="thread-id" name="id" placeholder="e.g. my_thread" />
-            </label>
-            <label>
+          <div class="post-editor-heading">■ 发帖</div>
+          <div class="editor-form-grid">
+            <div class="editor-field">
+              <span class="label">帖子 ID</span>
+              <input id="thread-id" name="id" placeholder="例如 my_thread" />
+            </div>
+            <div class="editor-field">
               <span class="label">标题</span>
               <input id="thread-title" name="title" placeholder="标题" />
-            </label>
-            <label>
-              <span class="label">副标题(可选)</span>
-              <input id="thread-subtitle" name="subtitle" placeholder="副标题" />
-            </label>
-            <label class="inline">
-              <input id="thread-featured" name="featured" type="checkbox" />
-              <span>加精(良スレ)</span>
-            </label>
+            </div>
+            <div class="editor-field">
+              <span class="label">标题翻译</span>
+              <input id="thread-subtitle" name="subtitle" placeholder="中文翻译（可选）" />
+            </div>
+            <div class="editor-field">
+              <span class="label">选项</span>
+              <label class="thread-featured-check">
+                <input id="thread-featured" name="featured" type="checkbox" />
+                <span>加精(良スレ)</span>
+              </label>
+            </div>
           </div>
-          <div class="editor-actions">
-            <button type="submit">保存</button>
+          <div class="post-editor-actions">
+            <button type="submit">保存帖子</button>
             <button type="button" data-action="cancel-thread-form">取消</button>
           </div>
-          <div class="hint">说明：Thread ID 只允许字母数字、下划线和短横线。</div>
+          <div class="post-editor-hint">说明: 帖子 ID 只允许字母数字、下划线和短横线。</div>
         </form>
       `
       : '';
@@ -419,7 +655,6 @@ class App {
           <a href="#" data-action="toggle-mode">${isEdit ? '查看模式' : '编辑模式'}</a>
         </div>
       </header>
-      ${threadEditor}
       <div style="padding: 10px;">
         <table class="thread-table">
           <thead>
@@ -430,6 +665,7 @@ class App {
           </tbody>
         </table>
       </div>
+      ${threadEditor}
     `;
 
     document.title = '所长的谣言板';
@@ -443,7 +679,7 @@ class App {
       this.container.innerHTML = `
         <div class="site-header">
           <div class="site-nav">
-            <a href="index.html" style="text-decoration:none; color: #CC0000;">&lt; 戻る</a>
+            <a href="index.html" style="text-decoration:none; color: #CC0000;">&lt; 返回</a>
             <span class="sep">|</span>
             <a href="../hub/">Hub</a><span class="sep">|</span><a href="../">Twitter</a>
           </div>
@@ -469,106 +705,275 @@ class App {
       const bodyColor = post.bodyColor ? ` style="color:${escapeHtml(post.bodyColor)}"` : '';
 
       const processedBody = this.processBody(post.body);
+      const isEditingThisPost = isEdit && this.editingPostNumber === post.number;
       const controls = isEdit
-        ? ` <span class="edit-actions">[<a href="#" data-action="edit-post" data-post-number="${post.number}">编辑</a>] [<a href="#" data-action="delete-post" data-post-number="${post.number}">删除</a>]</span>`
+        ? ` <span class="edit-actions">[<a href="#" data-action="edit-post" data-post-number="${post.number}">${isEditingThisPost ? '收起' : '编辑'}</a>] [<a href="#" data-action="delete-post" data-post-number="${post.number}">删除</a>]</span>`
+        : '';
+      const inlineEditor = isEditingThisPost
+        ? `<div class="post-inline-editor">${this.renderPostEditor(thread, { mode: 'edit', post })}</div>`
         : '';
 
       return `
-        <div class="post" id="post-${post.number}">
+        <div class="post${isEditingThisPost ? ' is-editing' : ''}" id="post-${post.number}" data-post-number="${post.number}">
           <div class="post-meta">
-            <span class="post-number">${post.number}</span> ：
+            <span class="post-number">${post.number}</span> :
             <span class="post-name"><b>${escapeHtml(post.name)}</b></span>
             <span class="post-date">${this.convertToJapaneseDate(post.date)}</span>
             <span class="post-uid"${uidColor}>${escapeHtml(uidInfo.uid)}</span>
             ${controls}
           </div>
           <div class="post-body"${bodyColor}>${processedBody}</div>
+          ${inlineEditor}
         </div>
       `;
     }).join('');
 
     const postEditor = isEdit
-      ? `
-        <form id="post-form" class="editor-box" autocomplete="off">
-          <input type="hidden" id="post-form-mode" value="create" />
-          <input type="hidden" id="post-number" name="number" value="" />
-          <div class="editor-grid">
-            <label>
-              <span class="label">姓名</span>
-              <input id="post-name" name="name" placeholder="名無しさん" />
-            </label>
-            <label>
-              <span class="label">发言人标记(authorKey)</span>
-              <input id="post-author-key" name="authorKey" placeholder="A / B / C ..." />
-            </label>
-            <label>
-              <span class="label">ID 模式</span>
-              <select id="post-uid-mode" name="uidMode">
-                <option value="random">随机(同贴固定)</option>
-                <option value="custom">自定义</option>
-              </select>
-            </label>
-            <label id="post-uid-value-wrap" style="display:none;">
-              <span class="label">自定义 ID</span>
-              <input id="post-uid-value" name="uidValue" placeholder="例如 AbCdEf12" />
-            </label>
-            <label>
-              <span class="label">ID 颜色(可选)</span>
-              <input id="post-uid-color" name="uidColor" placeholder="#666666" />
-            </label>
-            <label>
-              <span class="label">正文颜色(可选)</span>
-              <input id="post-body-color" name="bodyColor" placeholder="#000000" />
-            </label>
-            <label class="full">
-              <span class="label">日期</span>
-              <input id="post-date" name="date" />
-            </label>
-            <label class="full">
-              <span class="label">正文</span>
-              <textarea id="post-body" name="body" rows="6" placeholder="正文..."></textarea>
-            </label>
-          </div>
-          <div class="editor-actions">
-            <button type="submit">保存楼层</button>
-            <button type="button" data-action="cancel-post-form">取消</button>
-          </div>
-          <div class="hint">提示：支持锚点 <code>&gt;&gt;1</code> 与 <code>&lt;div class=&quot;fake-trans&quot;&gt;</code> 翻译块。</div>
-        </form>
-      `
+      ? this.renderPostEditor(thread, { mode: 'create' })
       : '';
 
     this.container.innerHTML = `
       <div class="site-header">
         <div class="site-nav">
-          <a href="index.html" style="text-decoration:none; color: #CC0000;">&lt; 戻る</a>
+          <a href="index.html" style="text-decoration:none; color: #CC0000;">&lt; 返回</a>
           <span class="sep">|</span>
           <a href="../hub/">Hub</a><span class="sep">|</span><a href="../">Twitter</a>
           <span class="sep">|</span>
           <a href="#" data-action="toggle-mode">${isEdit ? '查看模式' : '编辑模式'}</a>
-          <span class="sep">|</span>
-          <a href="#" data-action="submit-thread">投稿</a>
         </div>
       </div>
       <h1 class="thread-title">${titleHtml}</h1>
       <hr class="title-divider" />
       <div class="posts">${postCards || '<p style="color:#666;">(空)</p>'}</div>
       <div class="thread-footer">
-        <a href="#" onclick="return false;">全部読む</a>
+        <a href="#" onclick="return false;">全部</a>
         <a href="#" onclick="return false;">最新50</a>
         <a href="#" onclick="return false;">1-100</a>
-        <a href="index.html">この板の主なスレッド一覧</a>
-        <a href="#" onclick="location.reload(); return false;">リロード</a>
+        <a href="index.html">回到列表</a>
+        <a href="#" onclick="location.reload(); return false;">刷新</a>
       </div>
       ${postEditor}
     `;
 
     document.title = stripHtml(thread.titleText || threadId);
+  }
 
-    if (isEdit) {
-      // Default form values for "create post"
-      this.resetPostForm();
+  splitBodyParts(rawBody) {
+    const raw = String(rawBody || '').replace(/\r\n/g, '\n');
+    const lines = raw.split('\n');
+    const quoteLines = [];
+    const bodyLines = [];
+
+    for (const line of lines) {
+      if (/^\s*(?:>>|&gt;&gt;)\d+/.test(line.trim())) {
+        quoteLines.push(line.trim());
+      } else {
+        bodyLines.push(line);
+      }
     }
+
+    let bodyText = bodyLines.join('\n').trim();
+    let transText = '';
+    const transMatch = bodyText.match(/<div\s+class=["'“”]fake-trans["'“”]>([\s\S]*?)<\/div>/i);
+    if (transMatch) {
+      transText = transMatch[1].trim();
+      bodyText = bodyText.replace(transMatch[0], '').trim();
+    }
+
+    return {
+      quote: quoteLines.join('\n'),
+      body: bodyText,
+      trans: transText
+    };
+  }
+
+  parseQuoteNumbers(quoteText) {
+    const raw = String(quoteText || '');
+    const parts = raw.split(/[\n,\s]+/);
+    const nums = [];
+    for (const part of parts) {
+      const m = part.match(/^(?:>>|&gt;&gt;)?(\d+)$/);
+      if (!m) continue;
+      const n = Number(m[1]);
+      if (!Number.isFinite(n) || n <= 0) continue;
+      if (!nums.includes(n)) nums.push(n);
+    }
+    return nums;
+  }
+
+  quoteNumbersToText(numbers) {
+    return numbers.map((n) => `>>${n}`).join('\n');
+  }
+
+  renderQuoteItems(numbers) {
+    return numbers.map((n) => {
+      return `<span class="quote-chip">>>${n}<button type="button" data-action="remove-quote-item" data-quote-number="${n}">x</button></span>`;
+    }).join('');
+  }
+
+  syncQuoteUi(form) {
+    const hidden = form.querySelector('input[name="quote"]');
+    const list = form.querySelector('.quote-chip-list');
+    if (!(hidden instanceof HTMLInputElement) || !(list instanceof HTMLElement)) return;
+    const nums = this.parseQuoteNumbers(hidden.value);
+    list.innerHTML = this.renderQuoteItems(nums);
+  }
+
+  addQuoteItem(form) {
+    const input = form.querySelector('.quote-number-input');
+    const hidden = form.querySelector('input[name="quote"]');
+    if (!(input instanceof HTMLInputElement) || !(hidden instanceof HTMLInputElement)) return;
+    const next = Number(input.value.trim());
+    if (!Number.isFinite(next) || next <= 0) {
+      input.value = '';
+      return;
+    }
+    const nums = this.parseQuoteNumbers(hidden.value);
+    if (!nums.includes(next)) nums.push(next);
+    hidden.value = this.quoteNumbersToText(nums);
+    input.value = '';
+    this.syncQuoteUi(form);
+    input.focus();
+  }
+
+  removeQuoteItem(form, quoteNumber) {
+    const hidden = form.querySelector('input[name="quote"]');
+    if (!(hidden instanceof HTMLInputElement)) return;
+    const nums = this.parseQuoteNumbers(hidden.value).filter((n) => n !== quoteNumber);
+    hidden.value = this.quoteNumbersToText(nums);
+    this.syncQuoteUi(form);
+  }
+
+  composeBodyFromParts(quote, body, trans) {
+    const chunks = [];
+    const quoteText = String(quote || '').trim();
+    const bodyText = String(body || '').trim();
+    const transText = String(trans || '').trim();
+
+    if (quoteText) chunks.push(quoteText);
+    if (bodyText) chunks.push(bodyText);
+    if (transText) chunks.push(`<div class="fake-trans">${transText}</div>`);
+    return chunks.join('\n');
+  }
+
+  getPostFormValues(thread, post = null) {
+    if (post) {
+      const authorKey = String(post.authorKey || '').trim() || 'A';
+      const author = (thread.authors || {})[authorKey] || { uidMode: 'random', uidValue: '', uidColor: '' };
+      const bodyParts = this.splitBodyParts(post.body || '');
+      return {
+        number: post.number,
+        name: post.name || '',
+        authorKey,
+        uidMode: author.uidMode === 'custom' ? 'custom' : 'random',
+        uidValue: author.uidValue || '',
+        uidColor: author.uidColor || '',
+        bodyColor: post.bodyColor || '',
+        date: post.date || format2chDate(new Date()),
+        quote: bodyParts.quote,
+        body: bodyParts.body,
+        trans: bodyParts.trans
+      };
+    }
+
+    return {
+      number: '',
+      name: '',
+      authorKey: 'A',
+      uidMode: 'random',
+      uidValue: '',
+      uidColor: '',
+      bodyColor: '',
+      date: format2chDate(new Date()),
+      quote: '',
+      body: '',
+      trans: ''
+    };
+  }
+
+  renderPostEditor(thread, options = {}) {
+    const mode = options.mode === 'edit' ? 'edit' : 'create';
+    const post = mode === 'edit' ? options.post : null;
+    const values = this.getPostFormValues(thread, post);
+
+    const heading = mode === 'edit'
+      ? `编辑楼层 #${values.number}`
+      : '发新楼层';
+    const submitLabel = mode === 'edit' ? '保存楼层' : '追加楼层';
+    const cancelButton = mode === 'edit'
+      ? `<button type="button" data-action="cancel-edit-post" data-post-number="${escapeHtml(values.number)}">取消</button>`
+      : '<button type="button" data-action="cancel-post-form">清空</button>';
+    const uidCustomDisplay = values.uidMode === 'custom' ? 'flex' : 'none';
+    const modeClass = mode === 'edit' ? 'is-inline' : 'is-create';
+    const quoteNumbers = this.parseQuoteNumbers(values.quote);
+    const quoteText = this.quoteNumbersToText(quoteNumbers);
+    const quoteChips = this.renderQuoteItems(quoteNumbers);
+
+    return `
+      <div class="post-editor-shell ${modeClass}">
+        <div class="post-editor-heading">■ ${heading}</div>
+        <form class="post-form" data-mode="${mode}" autocomplete="off">
+          <input type="hidden" name="number" value="${escapeHtml(values.number)}" />
+          <div class="editor-form-grid">
+            <div class="editor-field">
+              <span class="label">姓名</span>
+              <input name="name" value="${escapeHtml(values.name)}" placeholder="名無しさん" />
+            </div>
+            <div class="editor-field">
+              <span class="label">发言人</span>
+              <input name="authorKey" value="${escapeHtml(values.authorKey)}" placeholder="A / B / C" />
+              <span class="field-hint">同一名字 → 自动分配相同 ID</span>
+            </div>
+            <div class="editor-field">
+              <span class="label">ID</span>
+              <div class="uid-row">
+                <select name="uidMode" class="post-uid-mode">
+                  <option value="random"${values.uidMode === 'custom' ? '' : ' selected'}>自动（同一发言人共享）</option>
+                  <option value="custom"${values.uidMode === 'custom' ? ' selected' : ''}>手动指定</option>
+                </select>
+                <span class="uid-custom-wrap" style="display:${uidCustomDisplay};">
+                  <input name="uidValue" value="${escapeHtml(values.uidValue)}" placeholder="如 AbCdEf12" />
+                </span>
+              </div>
+            </div>
+            <div class="editor-field">
+              <span class="label">ID 颜色</span>
+              <input name="uidColor" value="${escapeHtml(values.uidColor)}" placeholder="#666666" />
+            </div>
+            <div class="editor-field">
+              <span class="label">正文颜色</span>
+              <input name="bodyColor" value="${escapeHtml(values.bodyColor)}" placeholder="#000000" />
+            </div>
+            <div class="editor-field">
+              <span class="label">日期</span>
+              <input name="date" value="${escapeHtml(values.date)}" />
+            </div>
+            <div class="editor-field full">
+              <span class="label">引用</span>
+              <div class="quote-builder">
+                <input type="hidden" name="quote" value="${escapeHtml(quoteText)}" />
+                <input class="quote-number-input" inputmode="numeric" pattern="[0-9]*" placeholder="楼层号" />
+                <button type="button" data-action="add-quote-item">添加</button>
+                <div class="quote-chip-list">${quoteChips}</div>
+              </div>
+            </div>
+            <div class="editor-field full">
+              <span class="label">正文</span>
+              <textarea name="body" rows="${mode === 'edit' ? '5' : '6'}" placeholder="正文...">${escapeHtml(values.body)}</textarea>
+            </div>
+            <div class="editor-field full">
+              <span class="label">翻译</span>
+              <textarea name="trans" rows="3" placeholder="会自动包装成 fake-trans 区块">${escapeHtml(values.trans)}</textarea>
+            </div>
+          </div>
+          <div class="post-editor-actions">
+            <button type="submit">${submitLabel}</button>
+            ${cancelButton}
+          </div>
+          <div class="post-editor-hint">提示: 引用支持连续添加，空输入按退格可回删最后一项；保存时会自动组合正文与翻译块。</div>
+        </form>
+      </div>
+    `;
   }
 
   fillThreadForm(threadId) {
@@ -670,78 +1075,66 @@ class App {
     const post = (thread.posts || []).find((p) => p.number === postNumber);
     if (!post) return;
 
-    const modeEl = this.container.querySelector('#post-form-mode');
-    const numberEl = this.container.querySelector('#post-number');
-    const nameEl = this.container.querySelector('#post-name');
-    const authorEl = this.container.querySelector('#post-author-key');
-    const uidModeEl = this.container.querySelector('#post-uid-mode');
-    const uidValueEl = this.container.querySelector('#post-uid-value');
-    const uidColorEl = this.container.querySelector('#post-uid-color');
-    const bodyColorEl = this.container.querySelector('#post-body-color');
-    const dateEl = this.container.querySelector('#post-date');
-    const bodyEl = this.container.querySelector('#post-body');
-    if (!modeEl || !numberEl || !nameEl || !authorEl || !uidModeEl || !uidValueEl || !uidColorEl || !bodyColorEl || !dateEl || !bodyEl) return;
+    this.editingPostNumber = this.editingPostNumber === postNumber ? null : postNumber;
+    this.renderThread(thread.id);
 
-    const authorKey = String(post.authorKey || '').trim() || 'A';
-    const author = (thread.authors || {})[authorKey] || { uidMode: 'random', uidValue: '', uidColor: '' };
-
-    modeEl.value = 'edit';
-    numberEl.value = String(post.number);
-    nameEl.value = post.name || '';
-    authorEl.value = authorKey;
-    uidModeEl.value = author.uidMode === 'custom' ? 'custom' : 'random';
-    uidValueEl.value = author.uidValue || '';
-    uidColorEl.value = author.uidColor || '';
-    bodyColorEl.value = post.bodyColor || '';
-    dateEl.value = post.date || '';
-    bodyEl.value = post.body || '';
-
-    const wrap = this.container.querySelector('#post-uid-value-wrap');
-    if (wrap) wrap.style.display = uidModeEl.value === 'custom' ? 'block' : 'none';
+    if (this.editingPostNumber === postNumber) {
+      const bodyEl = this.container.querySelector(`#post-${postNumber} .post-form textarea[name="body"]`);
+      if (bodyEl instanceof HTMLTextAreaElement) {
+        bodyEl.focus();
+        const len = bodyEl.value.length;
+        bodyEl.setSelectionRange(len, len);
+      }
+    }
   }
 
   resetPostForm() {
-    const modeEl = this.container.querySelector('#post-form-mode');
-    const numberEl = this.container.querySelector('#post-number');
-    const nameEl = this.container.querySelector('#post-name');
-    const authorEl = this.container.querySelector('#post-author-key');
-    const uidModeEl = this.container.querySelector('#post-uid-mode');
-    const uidValueEl = this.container.querySelector('#post-uid-value');
-    const uidColorEl = this.container.querySelector('#post-uid-color');
-    const bodyColorEl = this.container.querySelector('#post-body-color');
-    const dateEl = this.container.querySelector('#post-date');
-    const bodyEl = this.container.querySelector('#post-body');
-    if (!modeEl || !numberEl || !nameEl || !authorEl || !uidModeEl || !uidValueEl || !uidColorEl || !bodyColorEl || !dateEl || !bodyEl) return;
+    const form = this.container.querySelector('.post-form[data-mode="create"]');
+    if (!(form instanceof HTMLFormElement)) return;
+    form.reset();
 
-    modeEl.value = 'create';
-    numberEl.value = '';
-    nameEl.value = '';
-    authorEl.value = 'A';
-    uidModeEl.value = 'random';
-    uidValueEl.value = '';
-    uidColorEl.value = '';
-    bodyColorEl.value = '';
-    dateEl.value = format2chDate(new Date());
-    bodyEl.value = '';
+    const authorEl = form.querySelector('input[name="authorKey"]');
+    if (authorEl instanceof HTMLInputElement) authorEl.value = 'A';
 
-    const wrap = this.container.querySelector('#post-uid-value-wrap');
-    if (wrap) wrap.style.display = 'none';
+    const uidModeEl = form.querySelector('select[name="uidMode"]');
+    if (uidModeEl instanceof HTMLSelectElement) uidModeEl.value = 'random';
+
+    const uidValueEl = form.querySelector('input[name="uidValue"]');
+    if (uidValueEl instanceof HTMLInputElement) uidValueEl.value = '';
+
+    const quoteEl = form.querySelector('input[name="quote"]');
+    if (quoteEl instanceof HTMLInputElement) quoteEl.value = '';
+
+    const dateEl = form.querySelector('input[name="date"]');
+    if (dateEl instanceof HTMLInputElement) dateEl.value = format2chDate(new Date());
+
+    const transEl = form.querySelector('textarea[name="trans"]');
+    if (transEl instanceof HTMLTextAreaElement) transEl.value = '';
+
+    const wrap = form.querySelector('.uid-custom-wrap');
+    if (wrap instanceof HTMLElement) wrap.style.display = 'none';
+    this.syncQuoteUi(form);
   }
 
   submitPostForm(form) {
     const thread = this.getThread(this.currentThreadId);
     if (!thread) return;
 
-    const mode = (form.querySelector('#post-form-mode')?.value || 'create').trim();
-    const numberRaw = Number(form.querySelector('#post-number')?.value || '0');
-    const name = String(form.querySelector('#post-name')?.value || '').trim() || '名無しさん';
-    const authorKey = String(form.querySelector('#post-author-key')?.value || '').trim() || 'A';
-    const uidMode = String(form.querySelector('#post-uid-mode')?.value || 'random') === 'custom' ? 'custom' : 'random';
-    const uidValue = normalizeIdPart(form.querySelector('#post-uid-value')?.value || '');
-    const uidColor = String(form.querySelector('#post-uid-color')?.value || '').trim();
-    const bodyColor = String(form.querySelector('#post-body-color')?.value || '').trim();
-    const date = String(form.querySelector('#post-date')?.value || '').trim() || format2chDate(new Date());
-    const body = String(form.querySelector('#post-body')?.value || '');
+    const mode = form.dataset.mode === 'edit' ? 'edit' : 'create';
+    const formData = new FormData(form);
+
+    const numberRaw = Number(formData.get('number') || '0');
+    const name = String(formData.get('name') || '').trim() || '名無しさん';
+    const authorKey = String(formData.get('authorKey') || '').trim() || 'A';
+    const uidMode = String(formData.get('uidMode') || 'random') === 'custom' ? 'custom' : 'random';
+    const uidValue = normalizeIdPart(formData.get('uidValue') || '');
+    const uidColor = String(formData.get('uidColor') || '').trim();
+    const bodyColor = String(formData.get('bodyColor') || '').trim();
+    const date = String(formData.get('date') || '').trim() || format2chDate(new Date());
+    const quote = String(formData.get('quote') || '').trim();
+    const bodyMain = String(formData.get('body') || '').trim();
+    const trans = String(formData.get('trans') || '').trim();
+    const body = this.composeBodyFromParts(quote, bodyMain, trans);
 
     if (!body.trim()) {
       alert('正文不能为空。');
@@ -771,8 +1164,8 @@ class App {
       });
       thread.listDate = date;
       this.saveState();
-      this.resetPostForm();
       this.renderThread(thread.id);
+      this.scrollToPost(nextNumber);
       return;
     }
 
@@ -784,9 +1177,10 @@ class App {
     post.body = body;
     post.bodyColor = bodyColor;
     thread.listDate = date;
+    this.editingPostNumber = null;
     this.saveState();
-    this.resetPostForm();
     this.renderThread(thread.id);
+    this.scrollToPost(post.number);
   }
 
   deletePost(postNumber) {
@@ -800,87 +1194,13 @@ class App {
     // Renumber to keep it simple.
     thread.posts.forEach((p, idx) => { p.number = idx + 1; });
     thread.listDate = thread.posts.length ? thread.posts[thread.posts.length - 1].date : format2chDate(new Date());
+    this.editingPostNumber = null;
     this.saveState();
-    this.resetPostForm();
     this.renderThread(thread.id);
   }
 
-  getSubmissionConfig() {
-    const cfg = (window.APP_SUBMISSION_CONFIG && typeof window.APP_SUBMISSION_CONFIG === 'object')
-      ? window.APP_SUBMISSION_CONFIG
-      : {};
-    const endpoint = typeof cfg.endpoint === 'string' && cfg.endpoint.trim()
-      ? cfg.endpoint.trim()
-      : '/api/submissions';
-    const projectKey = typeof cfg.projectKey === 'string' ? cfg.projectKey.trim() : '';
-    return { endpoint, projectKey };
-  }
-
   async submitThread() {
-    const thread = this.getThread(this.currentThreadId);
-    if (!thread) return;
-
-    const { endpoint, projectKey } = this.getSubmissionConfig();
-    if (!endpoint) {
-      alert('未配置投稿后端 endpoint。');
-      return;
-    }
-
-    const authorDisplayName = prompt('署名(可选)：', '') || '';
-    const authorContact = prompt('联系方式(可选)：', '') || '';
-    const showAuthorOnContent = confirm('是否在内容中展示署名？');
-    const note = prompt('备注(可选)：', '') || '';
-
-    const payload = {
-      thread: {
-        id: thread.id,
-        title: thread.titleText,
-        subtitle: thread.subtitleText || '',
-        featured: Boolean(thread.featured),
-        posts: (thread.posts || []).map((p) => {
-          const author = (thread.authors || {})[p.authorKey] || { uidMode: 'random', uidValue: '', uidColor: '' };
-          return {
-            number: p.number,
-            name: p.name,
-            authorKey: p.authorKey,
-            uidMode: author.uidMode,
-            uidValue: author.uidValue,
-            uidColor: author.uidColor || '',
-            body: p.body,
-            bodyColor: p.bodyColor || '',
-            date: p.date
-          };
-        })
-      }
-    };
-
-    const body = {
-      schemaVersion: 1,
-      source: '2ch',
-      projectKey: projectKey || undefined,
-      payload,
-      authorDisplayName: authorDisplayName || undefined,
-      authorContact: authorContact || undefined,
-      showAuthorOnContent,
-      note: note || undefined
-    };
-
-    try {
-      const res = await fetch(endpoint, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(body)
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        alert(`投稿失败: ${data.error || res.status}`);
-        return;
-      }
-      alert(`投稿成功，ID: ${data.id}`);
-    } catch (e) {
-      console.error(e);
-      alert('投稿失败：网络错误。');
-    }
+    alert('投稿功能暂未开放，当前版本仅支持本地编辑与保存。');
   }
 
   getAuthorUid(thread, authorKey) {
@@ -903,7 +1223,7 @@ class App {
     if (!text) return '';
 
     // 1. Remove newlines before <div class="fake-trans"> to prevent huge gaps
-    let result = String(text).replace(/[\n\r\s]+(<div class="fake-trans">)/g, '$1');
+    let result = String(text).replace(/[\n\r\s]+(<div\s+class=["'“”]fake-trans["'“”]>)/gi, '$1');
 
     // 2. Newlines to <br> (for the rest of the text)
     result = result.replace(/\n/g, '<br>');
@@ -949,3 +1269,5 @@ document.addEventListener('DOMContentLoaded', () => {
     document.querySelector('.container').innerHTML = `<p style="color:red">Error: ${escapeHtml(e.message || String(e))}</p>`;
   });
 });
+
+
