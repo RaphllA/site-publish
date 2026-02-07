@@ -37,6 +37,15 @@ a {
     margin: 0;
 }
 
+.build-tag {
+    font-size: 10px;
+    font-weight: normal;
+    color: #B7B7B7;
+    margin-left: 6px;
+    letter-spacing: 0.03em;
+    user-select: none;
+}
+
 .site-nav {
     margin-top: 6px;
     font-size: 13px;
