@@ -7,7 +7,7 @@ const APP_STATE_DB_NAME = 'Tukuyomi2chDB';
 const APP_STATE_DB_VERSION = 1;
 const APP_STATE_STORE = 'appState';
 const APP_STATE_RECORD_KEY = 'current';
-const APP_BUILD_TAG = 'b20260208-14';
+const APP_BUILD_TAG = 'b20260208-15';
 
 function escapeHtml(text) {
   return String(text || '')
@@ -554,6 +554,7 @@ class App {
       const name = String(p.name || '').trim() || '名無しさん';
       const date = String(p.date || '').trim() || format2chDate(new Date());
       const body = String(p.body || '');
+      const seedColor = String(p.uidColor || '').trim();
 
       const seedId = normalizeIdPart(p.uid || '');
       const authorKey = seedId ? seedId : `author_${number}`;
@@ -561,8 +562,10 @@ class App {
         authors[authorKey] = {
           uidMode: seedId ? 'custom' : 'random',
           uidValue: seedId || '',
-          uidColor: ''
+          uidColor: seedColor
         };
+      } else if (!authors[authorKey].uidColor && seedColor) {
+        authors[authorKey].uidColor = seedColor;
       }
 
       return {

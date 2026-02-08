@@ -47,7 +47,8 @@ app.setThreadData({
             "number": 7,
             "name": "ヤチヨ",
             "date": "2030/09/20(金) 20:30:00.00",
-            "uid": "<span style=\"color:red\">ID:ヤチヨ</span>",
+            "uid": "ID:ヤチヨ",
+            "uidColor": "#d10000",
             "body": "上記全てのIPアドレスを記録しました。\n<div class=\"fake-trans\">上面所有人的IP已记录。</div>"
         },
         {
