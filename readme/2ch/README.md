@@ -133,13 +133,20 @@ app.setThreadData({
 
 **目的**：防止用户浏览器缓存旧文件，确保显示最新内容。
 
-#### 需要更新的文件（共3处）
+#### 发布硬规则（必须）
+
+每次更新 `2ch` 并准备推送前，以下 **5处版本号必须全部更新且保持一致**（同一 `YYYYMMDD-N`）。
+任意一处漏改，都可能出现“远端新JS + 旧CSS”的缓存分裂问题。
+
+#### 需要更新的文件（共5处）
 
 | 文件 | 位置 | 作用 |
 |------|------|------|
+| `index.html` | 第8行 `<link rel="stylesheet" href="css/style.css?v=YYYYMMDD-N">` | 缓存破坏-首页样式 |
 | `index.html` | 第16行 `<script src="js/app.js?v=YYYYMMDD-N">` | 缓存破坏-首页脚本 |
+| `thread.html` | 第8行 `<link rel="stylesheet" href="css/style.css?v=YYYYMMDD-N">` | 缓存破坏-帖子页样式 |
 | `thread.html` | 第16行 `<script src="js/app.js?v=YYYYMMDD-N">` | 缓存破坏-帖子页脚本 |
-| `js/app.js` | 第10行 `const APP_BUILD_TAG = 'bYYYYMMDD-N';` | 首页显示的版本标识 |
+| `js/app.js` | 第10行 `const APP_BUILD_TAG = 'bYYYYMMDD-N';` | 线程数据请求版本 + 首页显示版本标识 |
 
 #### 版本号格式说明
 
@@ -151,11 +158,13 @@ app.setThreadData({
   - 前缀 `b` 表示 "build"
   - 数字部分与HTML保持一致
 
-#### 更新步骤
+#### 更新步骤（每次推送前按顺序执行）
 
-1. 打开 `index.html`，找到第16行，将版本号 +1
-2. 打开 `thread.html`，找到第16行，将版本号 +1（与index.html保持一致）
-3. 打开 `js/app.js`，找到第10行，将 `APP_BUILD_TAG` 的版本号 +1（与前两者保持一致）
+1. 打开 `index.html`，将 `css/style.css?v=...` 的版本号 +1
+2. 打开 `index.html`，将 `js/app.js?v=...` 的版本号改成与上一步一致
+3. 打开 `thread.html`，将 `css/style.css?v=...` 的版本号改成与上一步一致
+4. 打开 `thread.html`，将 `js/app.js?v=...` 的版本号改成与上一步一致
+5. 打开 `js/app.js`，将 `APP_BUILD_TAG` 改成 `b` + 同一版本号（例如 `b20260208-9`）
 
 **示例**：
 ```
@@ -174,7 +183,7 @@ app.setThreadData({
 - [ ] ID格式是否一致？同一用户ID相同？
 - [ ] 日期格式是否正确？曜日是否为日文？
 - [ ] `&gt;&gt;` 是否正确转义用于引用链接？
-- [ ] 版本号是否已更新（3处文件）？
+- [ ] 版本号是否已更新（5处文件且完全一致）？
 
 ## 如何把你的内容发布为默认预设
 
