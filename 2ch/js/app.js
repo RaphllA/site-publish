@@ -7,7 +7,7 @@ const APP_STATE_DB_NAME = 'Tukuyomi2chDB';
 const APP_STATE_DB_VERSION = 1;
 const APP_STATE_STORE = 'appState';
 const APP_STATE_RECORD_KEY = 'current';
-const APP_BUILD_TAG = 'b20260208-13';
+const APP_BUILD_TAG = 'b20260208-14';
 
 function escapeHtml(text) {
   return String(text || '')
@@ -848,7 +848,7 @@ class App {
       <header class="site-header">
         <h1 class="site-title">所长的谣言板 <span class="build-tag" title="build">${APP_BUILD_TAG}</span></h1>
         <div class="site-nav">
-          <a href="../hub/">Hub</a><span class="sep">|</span><a href="../">Twitter</a>
+          <a href="../hub/">Hub</a><span class="sep">|</span><a href="../twi/">Twitter</a>
           <span class="sep">|</span>
           <a href="#" data-action="toggle-mode">${isEdit ? '查看模式' : '编辑模式'}</a>
         </div>
@@ -879,7 +879,7 @@ class App {
           <div class="site-nav">
             <a href="index.html" style="text-decoration:none; color: #CC0000;">&lt; 返回</a>
             <span class="sep">|</span>
-            <a href="../hub/">Hub</a><span class="sep">|</span><a href="../">Twitter</a>
+            <a href="../hub/">Hub</a><span class="sep">|</span><a href="../twi/">Twitter</a>
           </div>
         </div>
         <p style="padding: 10px; color:#666;">Thread not found: ${escapeHtml(threadId)}</p>
@@ -946,7 +946,7 @@ class App {
         <div class="site-nav">
           <a href="index.html" style="text-decoration:none; color: #CC0000;">&lt; 返回</a>
           <span class="sep">|</span>
-          <a href="../hub/">Hub</a><span class="sep">|</span><a href="../">Twitter</a>
+          <a href="../hub/">Hub</a><span class="sep">|</span><a href="../twi/">Twitter</a>
           <span class="sep">|</span>
           <a href="#" data-action="toggle-mode">${isEdit ? '查看模式' : '编辑模式'}</a>
         </div>
