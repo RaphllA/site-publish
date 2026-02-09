@@ -221,6 +221,13 @@ a {
     line-height: 1.35;
 }
 
+.thread-list-date {
+    white-space: nowrap;
+    text-align: right;
+    color: #666;
+    vertical-align: top;
+}
+
 /* Thread View */
 .thread-title {
     font-size: 32px;
@@ -577,6 +584,18 @@ a {
 
     .thread-title {
         font-size: 24px;
+    }
+
+    /* Thread list: title takes priority, date wraps if needed */
+    .thread-list-date {
+        white-space: normal;
+        font-size: 13px;
+        min-width: 5em;
+        word-break: keep-all;
+    }
+
+    .thread-table td:first-child {
+        width: 100%;
     }
 
     .post-body {

@@ -65,6 +65,12 @@ app.setThreadList({
             "title": "【激震】かぐや復活？！いきなりいろP・ヤチヨと3人コラボライブ。集金確定か？<div class=\"title-subtitle\">kaguya复活，一上来就是和彩P八千代三人联动live，捞钱预定？</div>",
             "count": 34,
             "date": "2040/09/12(木) 21:05:00"
+        },
+        {
+            "id": "cp_war_ycir_irkg",
+            "title": "【党争】結局お前ら今どっちのCP推してるん？ycir？irkg？<div class=\"title-subtitle\">【党争】结果你们现在到底推哪对CP？ycir？irkg？</div>",
+            "count": 11,
+            "date": "2041/08/20(火) 21:15:32"
         }
     ]
 });
