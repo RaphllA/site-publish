@@ -77,6 +77,12 @@
             "title": "【興味】酒寄研究所ってどう見てる？<div class=\"title-subtitle\">【好奇】大家对酒寄研究所是怎么看的？</div>",
             "count": 27,
             "date": "2041/09/10(火) 19:15:32"
+        },
+        {
+            "id": "sakayori_lab_internal",
+            "title": "【内部】SKY研内部議論スレ<div class=\"title-subtitle\">【内部】SKY研（酒寄研）内部讨论帖</div>",
+            "count": 10,
+            "date": "2041/10/08(水) 18:22:05"
         }
     ]
 });
